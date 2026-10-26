@@ -2,7 +2,8 @@
 
 Canonical cross-harness artifact skill and client contract for HerdR.
 
-`herdr-artifact` lets Codex, Claude Code, Pi, and OpenCode agents create,
+`/herdr::artifact` (with `herdr-artifact` retained as a compatibility alias)
+lets Codex, Claude Code, Pi, and OpenCode agents create,
 inspect, edit, validate, version, materialize, bundle, diff, and request
 publication of artifacts through the HerdR Artifact Registry. Bytes remain in
 RustFS/S3-compatible storage; PostgreSQL owns metadata, permissions, versions,
@@ -20,7 +21,8 @@ From a clone:
 ```
 
 The installer links the skill into Codex, Claude Code, Pi, and OpenCode skill
-directories. Existing non-symlink installations are backed up before linking.
+directories. Existing skill installations are never overwritten; collisions are
+reported and the namespaced `/herdr::artifact` route remains the safe contract.
 Use `HERDR_ARTIFACT_SKILL_ROOT` to select a different destination root, or set
 `CODEX_HOME`, `CLAUDE_SKILLS_DIR`, `PI_SKILLS_DIR`, and
 `OPENCODE_SKILLS_DIR` explicitly.

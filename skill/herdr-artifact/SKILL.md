@@ -5,6 +5,10 @@ description: Create, inspect, edit, validate, version, materialize, and request 
 
 # HerdR Artifact Skill
 
+The preferred user-facing command is `/herdr::artifact`. The standalone
+`herdr-artifact` skill name remains a compatibility alias for harnesses that
+do not support namespaced commands.
+
 Use the authenticated HerdR control-plane API as the artifact authority. RustFS
 holds immutable bytes; PostgreSQL holds logical IDs, versions, provenance,
 reviews, bindings, and publication state.

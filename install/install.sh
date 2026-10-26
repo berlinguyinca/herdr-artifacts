@@ -19,7 +19,6 @@ else
   opencode_dir=${OPENCODE_SKILLS_DIR:-$HOME/.config/opencode/skills}
 fi
 
-timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 install_one() {
   destination="$1/herdr-artifact"
   mkdir -p "$(dirname "$destination")"
@@ -27,7 +26,8 @@ install_one() {
     if [ -L "$destination" ] && [ "$(readlink "$destination")" = "$skill_source" ]; then
       return 0
     fi
-    mv "$destination" "$destination.backup.$timestamp"
+    echo "collision: leaving existing $destination unchanged" >&2
+    return 0
   fi
   ln -s "$skill_source" "$destination"
   echo "installed $destination"
