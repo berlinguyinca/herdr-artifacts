@@ -21,3 +21,13 @@ working tree, uncommitted) and screenshotted the HTML with headless Chrome.
 4. Web validation should report external-resource/script findings rather than a flat pass.
 5. Implement or drop `presentation` in SKILL.md.
 6. The runtime (`artifact_*` modules, `artifact_reports_client.py`, migrations 0003-0008) is untracked in herdr-engineering and origin/main has renumbered migrations; land it before the skill's report commands can work.
+
+## Update (same day)
+Runtime port: report layer ported onto origin/main in herdr-engineering branch
+`feat/artifact-reports-port` (worktree `.worktrees/artifact-reports-port`, not pushed).
+Items 1, 2 and 4 are done there: stdlib markdown renderer (headings, lists, tables,
+fences, links, inline code; raw HTML escaped; unsafe link schemes left as text),
+`ArtifactRendererError.code == "unsupported_format"` recorded in job errors, and web
+`validation.findings` for scripts and external resources. Still open: Mermaid-to-SVG,
+chart rendering, the presentation profile, and porting the web client (`client.js`,
+`artifacts-view.js`) and Playwright tests.
