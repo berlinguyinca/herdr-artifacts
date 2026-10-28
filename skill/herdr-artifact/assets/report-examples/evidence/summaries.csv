@@ -1,0 +1,3 @@
+method,device,mean_ms,trials
+baseline,device-A,124,30
+candidate,device-B,118,8

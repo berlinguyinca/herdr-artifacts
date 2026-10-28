@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "title": "Synthetic processing-method benchmark",
+  "summary": "Demonstration data for report authoring; no real measurements or method improvement are claimed.",
+  "questions": [
+    {
+      "id": "question-1",
+      "text": "Which method warrants an independent comparison?"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "evidence-1",
+      "title": "Synthetic benchmark summaries",
+      "description": "Illustrative baseline mean 124 ms across 30 trials on device A; candidate mean 118 ms across eight trials on device B. Variability is unavailable.",
+      "asset_ids": [
+        "data-1"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "finding-1",
+      "title": "Observed difference needs a controlled evaluation",
+      "statement": "The supplied means differ, but the device and method change together.",
+      "question_ids": [
+        "question-1"
+      ],
+      "evidence_ids": [
+        "evidence-1"
+      ],
+      "figure_ids": [
+        "figure-1"
+      ],
+      "limitations": [
+        "The comparison does not isolate the method effect."
+      ],
+      "next_steps": [
+        "Freeze both methods and evaluate on comparable devices and new trials."
+      ]
+    }
+  ],
+  "figures": [
+    {
+      "id": "figure-1",
+      "title": "Reported means",
+      "asset_id": "plot-1",
+      "caption": "Mean elapsed time in milliseconds, with trial counts and device labels.",
+      "reading_guide": "A shorter bar is a lower reported mean, not a validated causal improvement."
+    }
+  ],
+  "assets": [
+    {
+      "id": "data-1",
+      "name": "evidence/summaries.csv",
+      "role": "data",
+      "media_type": "text/csv",
+      "sha256": "6982d5159d2b4e9d88af83c09e4198536df4e76b99eb9fdddb3c5d57b66abab5",
+      "size_bytes": 79
+    },
+    {
+      "id": "plot-1",
+      "name": "figures/means.svg",
+      "role": "figure",
+      "media_type": "image/svg+xml",
+      "sha256": "490450356687a5e834f125487c9110350d7c5b33150efe39f398993ee88fd8ea",
+      "size_bytes": 1304
+    }
+  ],
+  "analysis": {
+    "method": "Descriptive comparison of synthetic supplied summaries",
+    "configuration": {
+      "data_origin": "synthetic example",
+      "comparison": "different devices; exploratory only"
+    }
+  },
+  "limitations": [
+    "All values are synthetic demonstration data.",
+    "No trial-level observations or variability estimates are supplied."
+  ],
+  "next_steps": [
+    "Collect independently evaluated measurements."
+  ]
+}
