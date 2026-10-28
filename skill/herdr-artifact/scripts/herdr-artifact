@@ -7,6 +7,9 @@ command=${1:-}
 [ "$#" -gt 0 ] && shift
 
 case "$command" in
+  report)
+    exec herdr-eng artifacts reports "$@"
+    ;;
   create|upload)
     exec herdr-eng artifacts upload "$@"
     ;;
@@ -52,7 +55,7 @@ PY
       -X POST --data "$body" "$base/api/v1/publications/requests"
     ;;
   *)
-    echo "usage: herdr-artifact {create|upload|history|share-request} ..." >&2
+    echo "usage: herdr-artifact {report|create|upload|history|share-request} ..." >&2
     exit 2
     ;;
 esac

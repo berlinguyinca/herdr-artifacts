@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="260" viewBox="0 0 640 260" role="img" aria-labelledby="title description">
+  <title id="title">Synthetic reported means</title>
+  <desc id="description">Baseline 124 milliseconds, 30 trials on device A; candidate 118 milliseconds, eight trials on device B. Different devices prevent a causal comparison.</desc>
+  <rect width="640" height="260" fill="white"/>
+  <g font-family="sans-serif" font-size="14" fill="#172033">
+    <text x="24" y="28">Synthetic example: elapsed time, milliseconds (zero baseline)</text>
+    <text x="24" y="78">Baseline</text><text x="24" y="138">Candidate</text>
+    <rect x="130" y="48" width="248" height="40" fill="#375b8c"/>
+    <rect x="130" y="108" width="236" height="40" fill="#a25025"/>
+    <text x="390" y="74">124 ms · 30 trials · device A</text>
+    <text x="378" y="134">118 ms · 8 trials · device B</text>
+    <path d="M130 158H430" stroke="#172033"/>
+    <text x="126" y="180">0</text><text x="218" y="180">50</text><text x="315" y="180">100</text><text x="415" y="180">150</text>
+    <text x="24" y="212">No variability estimates supplied. Means describe different conditions.</text>
+    <text x="24" y="238">Next: compare both methods on comparable devices and fresh trials.</text>
+  </g>
+</svg>
