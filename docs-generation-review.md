@@ -31,3 +31,9 @@ fences, links, inline code; raw HTML escaped; unsafe link schemes left as text),
 `validation.findings` for scripts and external resources. Still open: Mermaid-to-SVG,
 chart rendering, the presentation profile, and porting the web client (`client.js`,
 `artifacts-view.js`) and Playwright tests.
+
+## Update 2 (same day)
+Charts (bar/line spec), Mermaid flowcharts and markdown slide decks now render in
+`feat/artifact-renderers-svg` (herdr-engineering PR stacked on #348); `presentation`
+is supported. Remaining gaps: non-flowchart Mermaid, multi-series charts, edge routing
+around nodes, and a dark-mode palette for the SVG output.
