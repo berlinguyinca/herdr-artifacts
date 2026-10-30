@@ -117,3 +117,12 @@ validation workflow through native HerdR APIs.
 5. Attach the artifact/version to existing mission, session, room, issue, or
    commit relationships using their explicit IDs.
 6. Request sharing separately if a human wants an external publication.
+
+## Share links (safety contract)
+
+Sharing is owner-approved and never automatic. Use `herdr-eng artifacts share create` to make a pending share
+(audience `lab` with an allow-list, or `public`), show the user the exposure summary, and run `share approve` only
+after the user has seen it and said yes; pass `--yes` only on that explicit instruction. Never approve on your own,
+never widen an audience, and never invent recipients. The URL is a bearer secret shown once at approval: give it
+only to the user, do not log it or write it into files, and use `share revoke` if it leaks. See
+`references/share-commands.md`.
