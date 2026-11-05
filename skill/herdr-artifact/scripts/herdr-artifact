@@ -20,11 +20,15 @@ if [ -z "$mode" ]; then
   if has_mcp_block; then
     if ! command -v herdr-eng >/dev/null 2>&1; then
       mode=mcp
-    elif ! { timeout 10 herdr-eng doctor >/dev/null 2>&1 </dev/null; }; then
-      mode=mcp
+    else
+      # bounded when `timeout` exists; without it the check runs unbounded rather than being skipped
+      bound=
+      if command -v timeout >/dev/null 2>&1; then bound="timeout 10"; fi
+      $bound herdr-eng doctor >/dev/null 2>&1 </dev/null || mode=mcp
     fi
   fi
 fi
+echo "herdr-artifact: mode: $mode" >&2
 if [ "$mode" = "mcp" ]; then
   has_mcp_block || { echo "MCP mode needs an mcp: block in ~/.config/herdr/artifact.yaml" >&2; exit 2; }
   exec python3 "$here/herdr-artifact-mcp" "$@"

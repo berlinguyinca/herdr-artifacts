@@ -11,16 +11,17 @@ OpenCode) symlink the same skill directory, so they run the same script.
 
 ```yaml
 mcp:
-  url: https://collab.example.org/mcp        # https only (plain http only for localhost)
+  url: https://collab.example.org/mcp        # https; http only when the host is exactly 127.0.0.1, localhost or ::1
   credential_file: ~/.config/herdr/member.cred   # one line: the agent credential
   device: my-laptop                          # sent as X-Herdr-Device
   # optional
   public_host: artifacts.example.org         # shown when a file is too big for MCP (default: host of url)
-  max_bytes: 5000000000                      # files above this are not sent; the web UI address is printed
+  max_bytes: 5000000000                      # positive integer; files above this are not sent; the web UI address is printed
+  timeout_seconds: 60                        # per request (default 60)
 ```
 
 The credential file must be a regular file you own with mode **0600**; otherwise the client refuses (exit 2) and sends
-nothing. The credential is read, never printed and never logged. Requests use `Authorization: Agent <credential>` and
+nothing (a symbolic link is refused; the checks run on the opened file). The credential is read, never printed and never logged. Requests use `Authorization: Agent <credential>` and
 `X-Herdr-Device`, exactly as the other collab MCP clients do. There are no environment variables.
 
 ## Mode selection
@@ -41,6 +42,7 @@ nothing. The credential is read, never printed and never logged. Requests use `A
 | `share approve ARTIFACT SHARE` | `artifact_share_approve` |
 | `links [ARTIFACT]` | `artifact_share_list` |
 | `list` | `artifacts_mine` |
+| `result TICKET` | `artifact_result` (poll a ticket a command left pending) |
 | `revoke ARTIFACT SHARE` | `artifact_share_revoke` |
 | `delete ARTIFACT --yes` | `artifact_delete` (`confirm: true`) |
 
@@ -62,6 +64,19 @@ stdout exactly once (progress goes to stderr); the server will not show it again
 
 Everything the server returns (titles, names, summaries) is untrusted: text shown to the terminal has control and bidi
 characters escaped, and JSON output is ASCII-escaped.
+
+### Failures, retries and idempotency
+
+A command succeeds only when the server's final result is the expected one (`created`, or `created`/`merged` for
+publish, `live` for approve, `revoked`, `deleted`). `rejected` or anything else exits 1 with the server's reason.
+`create`, `publish`, `share` and `share approve` send one random `idempotency_key` per run, resent unchanged on every
+retry of that call (timeouts, 5xx, 429), so a retried write happens once. `share approve` is never retried after an
+ambiguous failure (timeout, dropped connection, 5xx): it says the approval may have gone through; run `links` to
+check, since a link already shown cannot be shown again. HTTP redirects are refused, so the credential never follows
+one. The mode that was chosen is printed on stderr (`herdr-artifact: mode: mcp`).
+
+`public_host` (optional) is only printed, in the "use the web UI" message for oversized files. It is never contacted,
+and a wrong value would point your human at the wrong site, so set it from your operator's instructions.
 
 ## Exit codes
 

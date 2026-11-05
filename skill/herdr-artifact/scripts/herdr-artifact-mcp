@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 import sys
 import time
@@ -74,6 +75,20 @@ def parse_mcp_block(text):
     return None
 
 
+def check_url(url):
+    """https, or http only when the parsed host is exactly a loopback name; no userinfo, no other scheme."""
+    try:
+        u = urllib.parse.urlsplit(url)
+        host, _ = u.hostname, u.port
+    except ValueError:
+        raise Fail("mcp.url is not a valid URL", EXIT_USAGE)
+    if u.username is not None or u.password is not None or not host:
+        raise Fail("mcp.url must name a host and carry no credentials", EXIT_USAGE)
+    if u.scheme == "https" or (u.scheme == "http" and host in ("127.0.0.1", "localhost", "::1")):
+        return
+    raise Fail("mcp.url must be https (plain http only for 127.0.0.1, localhost or ::1)", EXIT_USAGE)
+
+
 def load_config():
     path = os.path.expanduser(CONFIG)
     try:
@@ -83,27 +98,43 @@ def load_config():
         raise Fail("no %s; MCP mode needs an `mcp:` block with url, credential_file and device" % CONFIG, EXIT_USAGE)
     if not block or not all(block.get(k) for k in ("url", "credential_file", "device")):
         raise Fail("%s needs mcp.url, mcp.credential_file and mcp.device" % CONFIG, EXIT_USAGE)
-    if not block["url"].startswith(("https://", "http://127.0.0.1", "http://localhost")):
-        raise Fail("mcp.url must be https (plain http only for localhost)", EXIT_USAGE)
+    check_url(block["url"])
+    for key in ("max_bytes", "timeout_seconds"):
+        if key in block:
+            if not re.fullmatch(r"[0-9]{1,15}", block[key]) or int(block[key]) < 1:
+                raise Fail("mcp.%s must be a positive integer" % key, EXIT_USAGE)
+    host = block.get("public_host")
+    if host is not None and not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", host):
+        raise Fail("mcp.public_host must be a bare host name (it is only printed, never contacted)", EXIT_USAGE)
     return block
 
 
 def read_credential(block):
     path = os.path.expanduser(block["credential_file"])
     try:
-        st = os.stat(path)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
     except OSError:
-        raise Fail("credential file is not readable", EXIT_USAGE)
-    if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077 or st.st_uid != os.getuid():
-        raise Fail("credential file must be a regular file owned by you with mode 0600 (chmod 600 it)", EXIT_USAGE)
-    with open(path, encoding="utf-8") as f:
-        cred = f.read().strip()
+        raise Fail("credential file is not readable (a symbolic link is refused)", EXIT_USAGE)
+    with os.fdopen(fd, encoding="utf-8") as f:
+        st = os.fstat(f.fileno())  # checks are on the opened file, so nothing can be swapped in after them
+        if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077 or st.st_uid != os.getuid():
+            raise Fail("credential file must be a regular file owned by you with mode 0600 (chmod 600 it)", EXIT_USAGE)
+        cred = f.read(4096).strip()
     if not cred or any(c.isspace() or ord(c) < 32 for c in cred):
         raise Fail("credential file is empty or malformed", EXIT_USAGE)
     return cred
 
 
 # ------------------------------------------------------------------ JSON-RPC
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None  # the Authorization header must never follow a redirect
+
+
+class Ambiguous(Fail):
+    """A state-changing call whose outcome is unknown (timeout, dropped connection, 5xx after sending)."""
+
 
 class Client:
     def __init__(self, block):
@@ -112,14 +143,18 @@ class Client:
         self.headers = {"Authorization": "Agent " + read_credential(block), "X-Herdr-Device": block["device"],
                         "Content-Type": "application/json", "Accept": "application/json"}
         self.rid = 0
+        self.timeout = int(block.get("timeout_seconds") or 60)
+        self.opener = urllib.request.build_opener(_NoRedirect)
 
     def _post(self, body):
         req = urllib.request.Request(self.url, data=json.dumps(body).encode(), headers=self.headers, method="POST")
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with self.opener.open(req, timeout=self.timeout) as resp:
             return json.loads(resp.read())
 
-    def call(self, tool, args):
-        """One tool call. Retries 429 (Retry-After or exponential backoff), transient 5xx and connection errors."""
+    def call(self, tool, args, retry_ambiguous=True):
+        """One tool call. Retries 429 (Retry-After or exponential backoff), transient 5xx and connection errors.
+        Calls with an idempotency_key resend the same key. With retry_ambiguous=False an outcome-unknown failure
+        raises Ambiguous instead (only a 429 is retried: the server did not process that one)."""
         for attempt in range(MAX_ATTEMPTS):
             self.rid += 1
             wait = min(0.25 * 2 ** attempt, 8.0)
@@ -129,12 +164,18 @@ class Client:
             except urllib.error.HTTPError as exc:
                 if exc.code == 401:
                     raise Fail("the server refused the credential (401)")
+                if 300 <= exc.code < 400:
+                    raise Fail("%s: the server answered with a redirect (HTTP %d), which is refused" % (tool, exc.code))
+                if exc.code != 429 and not retry_ambiguous and exc.code >= 500:
+                    raise Ambiguous("%s: HTTP %d" % (tool, exc.code))
                 if exc.code not in (429, 500, 502, 503, 504) or attempt == MAX_ATTEMPTS - 1 \
                         or (exc.code != 429 and attempt >= 2):
                     raise Fail("%s failed: HTTP %d" % (tool, exc.code))
                 retry = exc.headers.get("Retry-After", "")
                 wait = min(float(retry), 30.0) if retry.replace(".", "", 1).isdigit() else wait
             except (urllib.error.URLError, OSError, ValueError) as exc:
+                if not retry_ambiguous:
+                    raise Ambiguous("%s: %s" % (tool, clean(getattr(exc, "reason", exc))))
                 if attempt >= 2:
                     raise Fail("%s failed: %s" % (tool, clean(getattr(exc, "reason", exc))))
             else:
@@ -171,13 +212,29 @@ def settle(client, doc):
         if doc.get("status") != "pending":
             return doc
         doc = client.call("artifact_result", {"ticket": doc["ticket"], "seconds": 20})
-    raise Fail("still pending; poll later with ticket %s" % clean(doc.get("ticket")))
+    raise Fail("still pending; poll later with `herdr-artifact result %s`" % clean(doc.get("ticket")))
+
+
+OK = {"artifact_create": {"created"}, "artifact_publish": {"created", "merged"},
+      "artifact_share_create": {"created"}, "artifact_share_approve": {"live"},
+      "artifact_share_revoke": {"revoked"}, "artifact_delete": {"deleted"}}
+KEYED = ("artifact_create", "artifact_publish", "artifact_share_create", "artifact_share_approve")
 
 
 def done(client, tool, args):
-    doc = settle(client, client.call(tool, args))
-    if doc.get("result") in ("refused", "failed", "conflict", "error"):
-        raise Fail("%s: %s" % (tool, clean(doc.get("reason") or doc["result"])))
+    """Run a command's tool to its final result. Anything outside the tool's success set is a failure."""
+    if tool in KEYED:
+        args = {**args, "idempotency_key": "hda-" + secrets.token_hex(16)}  # one per call; resent on every retry
+    try:
+        doc = client.call(tool, args, retry_ambiguous=tool != "artifact_share_approve")
+    except Ambiguous as exc:
+        raise Fail("%s; the approval may have gone through. Check with `herdr-artifact links` before trying again "
+                   "(a duplicate approve is harmless but its link cannot be shown twice)" % exc)
+    doc = settle(client, doc)
+    result = doc.get("result")
+    if result not in OK[tool] and not (tool == "artifact_share_approve" and result == "already_approved"):
+        reason = doc.get("reason")
+        raise Fail("%s: %s%s" % (tool, clean(result), (" (%s)" % clean(reason)) if reason else ""))
     return doc
 
 
@@ -202,20 +259,20 @@ def upload_file(client, artifact_id, path, name):
         raise Fail("%s is empty" % path, EXIT_USAGE)
     file_sha = hash_file(path)
     ident = {"artifact_id": artifact_id, "name": name, "size_bytes": size, "file_sha256": file_sha}
-    status = client.call("artifact_upload_status", ident)
-    total = status["total"]
-    missing = [i for lo, hi in status["missing_ranges"] for i in range(lo, hi + 1)]
-    if status.get("truncated"):
-        missing = None  # the server listed only some ranges: send everything it has not confirmed, in rounds
-    todo = missing if missing is not None else range(total)
     with open(path, "rb") as f:
-        for index in todo:
-            f.seek(index * CHUNK_BYTES)
-            data = f.read(CHUNK_BYTES)
-            client.call("artifact_upload_chunk", {**ident, "index": index, "total": total,
-                                                  "sha256": hashlib.sha256(data).hexdigest(),
-                                                  "data_b64": base64.b64encode(data).decode("ascii")})
-            print("  %s: chunk %d/%d" % (name, index + 1, total), file=sys.stderr)
+        for _ in range(100_000):
+            status = client.call("artifact_upload_status", ident)
+            total = status["total"]
+            missing = [i for lo, hi in status["missing_ranges"] for i in range(lo, hi + 1)]
+            for index in missing:
+                f.seek(index * CHUNK_BYTES)
+                data = f.read(CHUNK_BYTES)
+                client.call("artifact_upload_chunk", {**ident, "index": index, "total": total,
+                                                      "sha256": hashlib.sha256(data).hexdigest(),
+                                                      "data_b64": base64.b64encode(data).decode("ascii")})
+                print("  %s: chunk %d/%d" % (name, index + 1, total), file=sys.stderr)
+            if not missing or not status.get("truncated"):
+                break  # the server listed every missing range, or none are missing
     return {"name": name, "upload_id": status["upload_id"]}
 
 
@@ -265,14 +322,18 @@ def cmd_share(client, a):
         args["allow_groups"] = a.group
     if a.email:
         args["allow_emails"] = a.email
-    if a.days:
+    if a.days is not None:
         args["expires_in_days"] = a.days
     doc = done(client, "artifact_share_create", args)
     summary = doc.get("summary")
-    print("Share %s of artifact %s version %s is PENDING (not live)." % (clean(doc.get("share_id")), clean(a.artifact), clean(a.version)))
+    share_id = doc.get("share_id")
+    if not isinstance(share_id, str) or not share_id:
+        raise Fail("the server created no share id; nothing to approve")
+    expiry = summary.get("expires_at") if isinstance(summary, dict) else None
+    print("Share %s of artifact %s version %s is PENDING (not live)." % (clean(share_id), clean(a.artifact), clean(a.version)))
     print("  audience: %s%s" % (clean(doc.get("audience", args["audience"])),
                                 "  (anyone holding the link can read it)" if args["audience"] == "public" else ""))
-    print("  expires:  %s" % (("in %d days" % a.days) if a.days else "server default"))
+    print("  expires:  %s" % (clean(expiry) if expiry else "not reported by the server (server default applies)"))
     if isinstance(summary, dict):
         files = summary.get("files")
         if isinstance(files, list):
@@ -285,7 +346,7 @@ def cmd_share(client, a):
     elif summary:
         print("  summary: " + clean(summary, 1000))
     print("STOP: show this file list, audience and expiry to your human. Only after their yes run:")
-    print("  herdr-artifact share approve %s %s" % (clean(a.artifact), clean(doc.get("share_id"))))
+    print("  herdr-artifact share approve %s %s" % (clean(a.artifact), clean(share_id)))
 
 
 def cmd_approve(client, a):
@@ -293,12 +354,20 @@ def cmd_approve(client, a):
     secret = doc.get("secret") or {}
     url = secret.get("url")
     if not url:
-        raise Fail("share is %s, but its link was already read; revoke it and share again"
+        raise Fail("share is %s, but its link was already shown; revoke it and share again"
                    % clean(doc.get("result", "unknown")))
-    if not re.fullmatch(r"https?://[^\s\x00-\x1f\x7f]+", url):
-        raise Fail("the server sent a malformed link")
+    try:
+        if not isinstance(url, str) or _CTRL.search(url) or re.search(r"\s", url):
+            raise Fail("bad link")
+        check_url(url)
+    except Fail:
+        raise Fail("the server sent a malformed link; not shown")
     print("Share is LIVE. The link below is shown ONCE; treat it like a password.", file=sys.stderr)
     print(url)
+
+
+def cmd_result(client, a):
+    out(client.call("artifact_result", {"ticket": a.ticket, "seconds": 20}))
 
 
 def cmd_links(client, a):
@@ -345,6 +414,9 @@ def build_parser():
     sh.add_argument("--audience", choices=("public",))
     sh.add_argument("--days", type=int)
     sh.set_defaults(func=None)
+    rs = sub.add_parser("result", help="poll a pending ticket")
+    rs.add_argument("ticket")
+    rs.set_defaults(func=cmd_result)
     ln = sub.add_parser("links")
     ln.add_argument("artifact", nargs="?")
     ln.set_defaults(func=cmd_links)
@@ -364,6 +436,8 @@ def dispatch(a):
     if a.command == "delete" and not a.yes:
         raise Fail("delete is permanent for you: ask your human, then repeat with --yes", EXIT_USAGE)
     if a.command == "share":
+        if a.days is not None and not 1 <= a.days <= 90:
+            raise Fail("--days must be 1 to 90", EXIT_USAGE)
         t = a.target
         if t[0] == "approve":
             if len(t) != 3 or a.group or a.email or a.audience or a.days:
