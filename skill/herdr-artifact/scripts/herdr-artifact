@@ -3,6 +3,33 @@ set -eu
 
 # Native harness wrapper. Keep this intentionally thin: authentication,
 # private control-plane routing, and artifact authorization stay in herdr-eng.
+here=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
+
+# Mode: --mode mcp|cli forces; otherwise MCP when ~/.config/herdr/artifact.yaml has an `mcp:` block and herdr-eng
+# is absent or fails `herdr-eng doctor` (control plane unreachable or unconfigured). No environment variables.
+mode=
+if [ "${1:-}" = "--mode" ]; then
+  mode=${2:-}
+  case "$mode" in mcp|cli) shift 2 ;; *) echo "--mode must be mcp or cli" >&2; exit 2 ;; esac
+fi
+has_mcp_block() {
+  grep -Eq '^mcp[[:space:]]*:' "${HOME:-/nonexistent}/.config/herdr/artifact.yaml" 2>/dev/null
+}
+if [ -z "$mode" ]; then
+  mode=cli
+  if has_mcp_block; then
+    if ! command -v herdr-eng >/dev/null 2>&1; then
+      mode=mcp
+    elif ! { timeout 10 herdr-eng doctor >/dev/null 2>&1 </dev/null; }; then
+      mode=mcp
+    fi
+  fi
+fi
+if [ "$mode" = "mcp" ]; then
+  has_mcp_block || { echo "MCP mode needs an mcp: block in ~/.config/herdr/artifact.yaml" >&2; exit 2; }
+  exec python3 "$here/herdr-artifact-mcp" "$@"
+fi
+
 command=${1:-}
 [ "$#" -gt 0 ] && shift
 
@@ -55,7 +82,7 @@ PY
       -X POST --data "$body" "$base/api/v1/publications/requests"
     ;;
   *)
-    echo "usage: herdr-artifact {report|create|upload|history|share-request} ..." >&2
+    echo "usage: herdr-artifact {report|create|upload|history|share-request} (MCP mode: create|publish|share|links|list|revoke|delete; --mode mcp|cli) ..." >&2
     exit 2
     ;;
 esac

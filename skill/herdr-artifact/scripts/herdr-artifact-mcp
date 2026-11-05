@@ -1,0 +1,395 @@
+#!/usr/bin/env python3
+"""herdr-artifact MCP mode: member artifacts over the collab MCP endpoint. Python 3 standard library only.
+
+Reads ~/.config/herdr/artifact.yaml (block `mcp: {url, credential_file, device}`; optional `public_host`,
+`max_bytes`). The credential file must be mode 0600. The credential is never printed or logged. The one secret this
+client ever prints is the share URL after `share approve`, once, on stdout."""
+import argparse
+import base64
+import hashlib
+import json
+import os
+import re
+import stat
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+CHUNK_BYTES = 524_288  # the server's chunk protocol (collab_bridge_files.CHUNK_BYTES)
+CONFIG = "~/.config/herdr/artifact.yaml"
+MAX_ATTEMPTS = 6
+RESULT_POLLS = 30
+EXIT_USAGE, EXIT_FAIL, EXIT_TOO_BIG = 2, 1, 3
+_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]")
+
+
+class Fail(Exception):
+    def __init__(self, message, code=EXIT_FAIL):
+        super().__init__(message)
+        self.code = code
+
+
+def clean(value, limit=300):
+    """Server-supplied text shown to a terminal: control and bidi characters escaped, length bounded."""
+    text = _CTRL.sub(lambda m: "\\u%04x" % ord(m.group()), str(value))
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def out(obj):
+    print(json.dumps(obj, indent=2, sort_keys=True))
+
+
+# ------------------------------------------------------------------ config
+
+def _scalar(text):
+    text = text.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+        text = text[1:-1]
+    return text
+
+
+def parse_mcp_block(text):
+    """The `mcp:` mapping of the YAML file (block or flow style, flat scalars), or None."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        m = re.match(r"mcp\s*:\s*(.*?)\s*(#.*)?$", line)
+        if not m:
+            continue
+        rest = m.group(1)
+        if rest.startswith("{"):
+            return {k.strip(): _scalar(v) for k, _, v in
+                    (p.partition(":") for p in rest.strip("{} ").split(",") if p.strip())}
+        block = {}
+        for nxt in lines[i + 1:]:
+            if not nxt.strip() or nxt.lstrip().startswith("#"):
+                continue
+            if not nxt[0].isspace():
+                break
+            k, sep, v = nxt.strip().partition(":")
+            if sep:
+                block[k.strip()] = _scalar(re.sub(r"\s+#.*$", "", v))
+        return block or None
+    return None
+
+
+def load_config():
+    path = os.path.expanduser(CONFIG)
+    try:
+        with open(path, encoding="utf-8") as f:
+            block = parse_mcp_block(f.read())
+    except OSError:
+        raise Fail("no %s; MCP mode needs an `mcp:` block with url, credential_file and device" % CONFIG, EXIT_USAGE)
+    if not block or not all(block.get(k) for k in ("url", "credential_file", "device")):
+        raise Fail("%s needs mcp.url, mcp.credential_file and mcp.device" % CONFIG, EXIT_USAGE)
+    if not block["url"].startswith(("https://", "http://127.0.0.1", "http://localhost")):
+        raise Fail("mcp.url must be https (plain http only for localhost)", EXIT_USAGE)
+    return block
+
+
+def read_credential(block):
+    path = os.path.expanduser(block["credential_file"])
+    try:
+        st = os.stat(path)
+    except OSError:
+        raise Fail("credential file is not readable", EXIT_USAGE)
+    if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077 or st.st_uid != os.getuid():
+        raise Fail("credential file must be a regular file owned by you with mode 0600 (chmod 600 it)", EXIT_USAGE)
+    with open(path, encoding="utf-8") as f:
+        cred = f.read().strip()
+    if not cred or any(c.isspace() or ord(c) < 32 for c in cred):
+        raise Fail("credential file is empty or malformed", EXIT_USAGE)
+    return cred
+
+
+# ------------------------------------------------------------------ JSON-RPC
+
+class Client:
+    def __init__(self, block):
+        self.block = block
+        self.url = block["url"]
+        self.headers = {"Authorization": "Agent " + read_credential(block), "X-Herdr-Device": block["device"],
+                        "Content-Type": "application/json", "Accept": "application/json"}
+        self.rid = 0
+
+    def _post(self, body):
+        req = urllib.request.Request(self.url, data=json.dumps(body).encode(), headers=self.headers, method="POST")
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read())
+
+    def call(self, tool, args):
+        """One tool call. Retries 429 (Retry-After or exponential backoff), transient 5xx and connection errors."""
+        for attempt in range(MAX_ATTEMPTS):
+            self.rid += 1
+            wait = min(0.25 * 2 ** attempt, 8.0)
+            try:
+                reply = self._post({"jsonrpc": "2.0", "id": self.rid, "method": "tools/call",
+                                    "params": {"name": tool, "arguments": args}})
+            except urllib.error.HTTPError as exc:
+                if exc.code == 401:
+                    raise Fail("the server refused the credential (401)")
+                if exc.code not in (429, 500, 502, 503, 504) or attempt == MAX_ATTEMPTS - 1 \
+                        or (exc.code != 429 and attempt >= 2):
+                    raise Fail("%s failed: HTTP %d" % (tool, exc.code))
+                retry = exc.headers.get("Retry-After", "")
+                wait = min(float(retry), 30.0) if retry.replace(".", "", 1).isdigit() else wait
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                if attempt >= 2:
+                    raise Fail("%s failed: %s" % (tool, clean(getattr(exc, "reason", exc))))
+            else:
+                try:
+                    return self._payload(tool, reply)
+                except Fail as exc:
+                    if getattr(exc, "status", None) != 429 or attempt == MAX_ATTEMPTS - 1:
+                        raise
+            time.sleep(wait)
+        raise Fail("%s failed" % tool)
+
+    @staticmethod
+    def _payload(tool, reply):
+        if "error" in reply:
+            raise Fail("%s: %s" % (tool, clean(reply["error"].get("message", "error"))))
+        result = reply.get("result") or {}
+        text = (result.get("content") or [{}])[0].get("text", "")
+        if text.startswith("UNTRUSTED"):  # member-authored text arrives behind a data-not-instructions notice
+            text = text.split("\n\n", 1)[-1]
+        try:
+            data = json.loads(text)
+        except ValueError:
+            raise Fail("%s: unreadable reply" % tool)
+        if result.get("isError"):
+            exc = Fail("%s refused: %s" % (tool, clean(data.get("error", "error")) if isinstance(data, dict) else "error"))
+            exc.status = data.get("status") if isinstance(data, dict) else None
+            raise exc
+        return data
+
+
+def settle(client, doc):
+    """Follow a pending ticket with artifact_result until it is done."""
+    for _ in range(RESULT_POLLS):
+        if doc.get("status") != "pending":
+            return doc
+        doc = client.call("artifact_result", {"ticket": doc["ticket"], "seconds": 20})
+    raise Fail("still pending; poll later with ticket %s" % clean(doc.get("ticket")))
+
+
+def done(client, tool, args):
+    doc = settle(client, client.call(tool, args))
+    if doc.get("result") in ("refused", "failed", "conflict", "error"):
+        raise Fail("%s: %s" % (tool, clean(doc.get("reason") or doc["result"])))
+    return doc
+
+
+# ------------------------------------------------------------------ upload
+
+def hash_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def too_big_message(block, path, size):
+    host = block.get("public_host") or urllib.parse.urlparse(block["url"]).hostname
+    return ("%s is %d bytes, over the MCP limit; upload it in the web UI at https://%s/" % (path, size, host))
+
+
+def upload_file(client, artifact_id, path, name):
+    size = os.path.getsize(path)
+    if size < 1:
+        raise Fail("%s is empty" % path, EXIT_USAGE)
+    file_sha = hash_file(path)
+    ident = {"artifact_id": artifact_id, "name": name, "size_bytes": size, "file_sha256": file_sha}
+    status = client.call("artifact_upload_status", ident)
+    total = status["total"]
+    missing = [i for lo, hi in status["missing_ranges"] for i in range(lo, hi + 1)]
+    if status.get("truncated"):
+        missing = None  # the server listed only some ranges: send everything it has not confirmed, in rounds
+    todo = missing if missing is not None else range(total)
+    with open(path, "rb") as f:
+        for index in todo:
+            f.seek(index * CHUNK_BYTES)
+            data = f.read(CHUNK_BYTES)
+            client.call("artifact_upload_chunk", {**ident, "index": index, "total": total,
+                                                  "sha256": hashlib.sha256(data).hexdigest(),
+                                                  "data_b64": base64.b64encode(data).decode("ascii")})
+            print("  %s: chunk %d/%d" % (name, index + 1, total), file=sys.stderr)
+    return {"name": name, "upload_id": status["upload_id"]}
+
+
+# ------------------------------------------------------------------ commands
+
+def cmd_create(client, a):
+    out(done(client, "artifact_create", {"title": a.title, "filename": a.filename, "profile": a.profile}))
+
+
+def cmd_publish(client, a):
+    names = {}
+    for p in a.paths:
+        if not os.path.isfile(p):
+            raise Fail("not a file: %s" % p, EXIT_USAGE)
+        base = os.path.basename(p)
+        if base in names:
+            raise Fail("two files named %s" % base, EXIT_USAGE)
+        names[base] = p
+    limit = int(client.block.get("max_bytes") or 0)
+    for base, p in names.items():
+        if limit and os.path.getsize(p) > limit:
+            print(too_big_message(client.block, p, os.path.getsize(p)))
+            raise Fail("file over the MCP maximum", EXIT_TOO_BIG)
+    artifact_id = a.artifact
+    if not artifact_id:
+        first = next(iter(names))
+        profile = "web" if first.lower().endswith((".html", ".htm")) else "document"
+        artifact_id = done(client, "artifact_create", {"title": a.message or first, "filename": first,
+                                                        "profile": profile})["artifact_id"]
+        print("created artifact %s" % artifact_id, file=sys.stderr)
+    files = [upload_file(client, artifact_id, p, base) for base, p in names.items()]
+    args = {"artifact_id": artifact_id, "files": files, "message": a.message or "publish via herdr-artifact"}
+    if a.base:
+        args["base_version_id"] = a.base
+    if a.entry:
+        args["entry"] = a.entry
+    out(done(client, "artifact_publish", args))
+
+
+def cmd_share(client, a):
+    if not (a.group or a.email or a.audience == "public"):
+        raise Fail("choose an audience: --group G, --email E (repeatable) or --audience public", EXIT_USAGE)
+    if a.audience == "public" and (a.group or a.email):
+        raise Fail("--audience public takes no --group or --email", EXIT_USAGE)
+    args = {"artifact_id": a.artifact, "version_id": a.version, "audience": "public" if a.audience == "public" else "lab"}
+    if a.group:
+        args["allow_groups"] = a.group
+    if a.email:
+        args["allow_emails"] = a.email
+    if a.days:
+        args["expires_in_days"] = a.days
+    doc = done(client, "artifact_share_create", args)
+    summary = doc.get("summary")
+    print("Share %s of artifact %s version %s is PENDING (not live)." % (clean(doc.get("share_id")), clean(a.artifact), clean(a.version)))
+    print("  audience: %s%s" % (clean(doc.get("audience", args["audience"])),
+                                "  (anyone holding the link can read it)" if args["audience"] == "public" else ""))
+    print("  expires:  %s" % (("in %d days" % a.days) if a.days else "server default"))
+    if isinstance(summary, dict):
+        files = summary.get("files")
+        if isinstance(files, list):
+            print("  files (%d):" % len(files))
+            for f in files:
+                print("    " + clean(f.get("name", f) if isinstance(f, dict) else f))
+        rest = {k: v for k, v in summary.items() if k != "files"}
+        if rest:
+            print("  details: " + clean(json.dumps(rest, sort_keys=True), 1000))
+    elif summary:
+        print("  summary: " + clean(summary, 1000))
+    print("STOP: show this file list, audience and expiry to your human. Only after their yes run:")
+    print("  herdr-artifact share approve %s %s" % (clean(a.artifact), clean(doc.get("share_id"))))
+
+
+def cmd_approve(client, a):
+    doc = done(client, "artifact_share_approve", {"artifact_id": a.artifact, "share_id": a.share, "confirm": True})
+    secret = doc.get("secret") or {}
+    url = secret.get("url")
+    if not url:
+        raise Fail("share is %s, but its link was already read; revoke it and share again"
+                   % clean(doc.get("result", "unknown")))
+    if not re.fullmatch(r"https?://[^\s\x00-\x1f\x7f]+", url):
+        raise Fail("the server sent a malformed link")
+    print("Share is LIVE. The link below is shown ONCE; treat it like a password.", file=sys.stderr)
+    print(url)
+
+
+def cmd_links(client, a):
+    out(client.call("artifact_share_list", {"artifact_id": a.artifact} if a.artifact else {}))
+
+
+def cmd_list(client, a):
+    out(client.call("artifacts_mine", {}))
+
+
+def cmd_revoke(client, a):
+    out(done(client, "artifact_share_revoke", {"artifact_id": a.artifact, "share_id": a.share}))
+
+
+def cmd_delete(client, a):
+    out(done(client, "artifact_delete", {"artifact_id": a.artifact, "confirm": True}))
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        raise Fail(message, EXIT_USAGE)
+
+
+def build_parser():
+    p = Parser(prog="herdr-artifact", description="member artifacts over MCP")
+    p.add_argument("--mode", choices=("mcp", "cli"), help=argparse.SUPPRESS)
+    sub = p.add_subparsers(dest="command", required=True, parser_class=Parser)
+    c = sub.add_parser("create")
+    c.add_argument("--title", required=True)
+    c.add_argument("--filename", required=True)
+    c.add_argument("--profile", choices=("web", "document"), required=True)
+    c.set_defaults(func=cmd_create)
+    pub = sub.add_parser("publish")
+    pub.add_argument("paths", nargs="+", metavar="PATH")
+    pub.add_argument("--artifact")
+    pub.add_argument("--base")
+    pub.add_argument("--entry")
+    pub.add_argument("-m", "--message")
+    pub.set_defaults(func=cmd_publish)
+    sh = sub.add_parser("share")
+    sh.add_argument("target", nargs="+", metavar="ARTIFACT VERSION | approve ARTIFACT SHARE")
+    sh.add_argument("--group", action="append")
+    sh.add_argument("--email", action="append")
+    sh.add_argument("--audience", choices=("public",))
+    sh.add_argument("--days", type=int)
+    sh.set_defaults(func=None)
+    ln = sub.add_parser("links")
+    ln.add_argument("artifact", nargs="?")
+    ln.set_defaults(func=cmd_links)
+    sub.add_parser("list").set_defaults(func=cmd_list)
+    rv = sub.add_parser("revoke")
+    rv.add_argument("artifact")
+    rv.add_argument("share")
+    rv.set_defaults(func=cmd_revoke)
+    de = sub.add_parser("delete")
+    de.add_argument("artifact")
+    de.add_argument("--yes", action="store_true")
+    de.set_defaults(func=cmd_delete)
+    return p
+
+
+def dispatch(a):
+    if a.command == "delete" and not a.yes:
+        raise Fail("delete is permanent for you: ask your human, then repeat with --yes", EXIT_USAGE)
+    if a.command == "share":
+        t = a.target
+        if t[0] == "approve":
+            if len(t) != 3 or a.group or a.email or a.audience or a.days:
+                raise Fail("usage: share approve ARTIFACT SHARE", EXIT_USAGE)
+            a.artifact, a.share, a.func = t[1], t[2], cmd_approve
+        else:
+            if len(t) != 2:
+                raise Fail("usage: share ARTIFACT VERSION (--group G | --email E... | --audience public) [--days N]",
+                           EXIT_USAGE)
+            a.artifact, a.version, a.func = t[0], t[1], cmd_share
+            if not (a.group or a.email or a.audience):
+                raise Fail("choose an audience: --group G, --email E (repeatable) or --audience public", EXIT_USAGE)
+    return a
+
+
+def main(argv):
+    try:
+        a = dispatch(build_parser().parse_args(argv))
+        a.func(Client(load_config()), a)
+    except Fail as exc:
+        print("herdr-artifact: %s" % exc, file=sys.stderr)
+        return exc.code
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
