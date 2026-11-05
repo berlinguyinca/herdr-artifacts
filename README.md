@@ -27,6 +27,11 @@ Use `HERDR_ARTIFACT_SKILL_ROOT` to select a different destination root, or set
 `CODEX_HOME`, `CLAUDE_SKILLS_DIR`, `PI_SKILLS_DIR`, and
 `OPENCODE_SKILLS_DIR` explicitly.
 
+## MCP mode
+
+Members without `herdr-eng` can configure an `mcp:` block in `~/.config/herdr/artifact.yaml`; see
+`skill/herdr-artifact/references/mcp-mode.md`. Run tests with `python3 -m unittest discover tests`.
+
 ## Use
 
 ```text

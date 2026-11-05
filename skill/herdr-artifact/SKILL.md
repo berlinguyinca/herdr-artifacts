@@ -25,6 +25,11 @@ reviews, bindings, and publication state.
 - `share-request` creates a pending human approval request. It never activates
   public access itself.
 - Public URLs must pin an immutable version and are revocable/expiring.
+- An agent must show its human the share summary (file list, audience, expiry) before `approve`. A public link is
+  readable by anyone who has it. The link is shown once. Deleting needs the human's yes (`delete --yes`); never pass
+  `--yes` on your own.
+- In MCP mode the credential file must be mode 0600 and is never printed or logged; `share` only creates a pending
+  share and `share approve` is a separate command run after the human's yes.
 
 ## Command contract
 
@@ -126,3 +131,10 @@ after the user has seen it and said yes; pass `--yes` only on that explicit inst
 never widen an audience, and never invent recipients. The URL is a bearer secret shown once at approval: give it
 only to the user, do not log it or write it into files, and use `share revoke` if it leaks. See
 `references/share-commands.md`.
+
+## MCP mode (member artifacts)
+
+Without `herdr-eng` (or when its control plane is unreachable), and with an `mcp:` block in
+`~/.config/herdr/artifact.yaml`, `scripts/herdr-artifact` runs `scripts/herdr-artifact-mcp`: `create`, `publish`
+(chunked, resumable), `share` (stops before approve), `share approve`, `links`, `list`, `revoke`, `delete --yes`.
+`--mode mcp|cli` forces a mode. See `references/mcp-mode.md`.
