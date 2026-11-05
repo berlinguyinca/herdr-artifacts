@@ -82,3 +82,13 @@ changed in a way that breaks the summary (`show` reports why).
 
 `share revoke` removes the link's state and bundle immediately. The audit trail (`share events`) stays.
 Revoke when a link is pasted somewhere it should not be, then create a new share.
+
+## MCP mode
+
+Members without `herdr-eng` use `herdr-artifact share ARTIFACT VERSION (--group G | --email E... | --audience public)
+[--days N]` (tool `artifact_share_create`) and `herdr-artifact share approve ARTIFACT SHARE` (`artifact_share_approve`);
+`links`, `revoke` and `delete ARTIFACT --yes` map to `artifact_share_list`, `artifact_share_revoke` and
+`artifact_delete`. `share` prints the pending summary (files, audience, expiry) and stops; it never approves. Show it
+to your human, who must say yes before `share approve`. `--audience public` links are readable by anyone holding
+them, expire within 90 days, and the URL is printed once on stdout by `approve`. There is no typed-yes prompt in this
+mode: the human's confirmation happens in the conversation, before the agent runs `approve`. See `mcp-mode.md`.
