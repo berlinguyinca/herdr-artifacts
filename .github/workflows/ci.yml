@@ -36,7 +36,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: python -m pip install --upgrade pip pytest
+        # requirements-dev.txt exists because the suite needs jsonschema, which the
+        # runner does not carry; installing only pytest left CI red on the first run.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
 
       - name: POSIX syntax check (skill wrapper)
         run: sh -n skill/herdr-artifact/scripts/herdr-artifact
