@@ -96,6 +96,35 @@ check requires references such as `evidence:evidence-1`, `finding:finding-1`, or
 checks. Later upstream checks can mark an older downstream signoff `stale`.
 Attribution records who made an attestation, not proof of a second human reviewer.
 
+## Hand back what the operator can open
+
+After a build completes, the operator needs IDs and URLs, not a summary. Show:
+
+```text
+<control-plane>/api/v1/artifacts/<A>/versions/<V>/preview   # the report itself
+<control-plane>/api/v1/library                              # the shared library listing
+```
+
+Use the origin the API answered on (host configuration, or the `--control-plane` you passed). Two hosts on one
+network both answer `/api/...`: the registry, and an unrelated single-page app that returns `200` plus a small HTML
+shell for any unknown path. Size the difference out before trusting a link — a real preview is kilobytes to
+megabytes, a foreign shell is a couple, and a missing version is a short `400`/`404` body.
+
+Read the current version from `herdr-eng artifacts show <A> --json` (`current_version_id`); `report versions A`
+rows carry no status or title, so they order history but do not name the head. Submit each follow-on `build` with
+`--base-version` equal to that current head; a stale base returns HTTP 412 `version_base_mismatch` and means
+rereading and reconciling, never forcing.
+
+Registration is not discoverability. `herdr-eng artifacts for project <id>` (and the matching dashboard view) is
+empty until `herdr-eng artifacts link <A> --project <id> --link-kind origin` records the relationship, and the
+library feed reflects fleet sharing policy, not a per-artifact list — this server has no member/ACL route, so
+`/api/v1/library/members` answers not-found.
+
+For `check`, `--evidence-ref` accepts only references that exist in that version's descriptor: `evidence:evidence-1`,
+`finding:finding-1`, `figure:figure-1`. A bare `evidence-1`, an asset reference, or an `artifact://` URI is rejected
+with HTTP 400. A passed `evidence_checked` or `reviewed` needs at least one reference, and a passed `reviewed`
+requires current passed `rendered` and `evidence_checked` — so record `rendered` first, then `evidence_checked`.
+
 The private dashboard fetches a preview when requested, without downloading
 supporting data. The preview is capped at 256 KiB, includes coverage notices, and
 links to separate assets rather than executing arbitrary source or rich report

@@ -105,8 +105,8 @@ this into an HTML report”, or equivalent:
 4. Preserve editable source, input references, generated manifest, output
    blobs, validation report, renderer/toolchain revision, host, session, and
    mission provenance.
-5. Return logical artifact ID, job ID, and current status. Keep the artifact
-   private unless the user separately requests `share-request`.
+5. Return logical artifact ID, job ID, and current status, then run the completion handoff
+   below. Keep the artifact private unless the user separately requests `share-request`.
 
 The skill may use React/TypeScript/HTML templates and deterministic renderers,
 but it must not vendor or copy proprietary upstream Claude/Anthropic skill
@@ -122,6 +122,50 @@ validation workflow through native HerdR APIs.
 5. Attach the artifact/version to existing mission, session, room, issue, or
    commit relationships using their explicit IDs.
 6. Request sharing separately if a human wants an external publication.
+7. Hand the artifact back per the completion handoff: IDs, version-pinned links, context
+   links, and the recorded checks — unprompted.
+
+## Completion handoff (IDs and links, unprompted)
+
+Every registered artifact or new version ends by handing back the IDs and the links that open it. Do this without
+being asked. A bare artifact ID is not a handoff, and a version ID the operator has to assemble a URL from is not
+either.
+
+Report, in this order:
+
+- artifact ID, then the current version ID — `herdr-eng artifacts show <A> --json` reports
+  `current_version_id`; reread it instead of reusing the build response, and say which version each link pins;
+- job ID and its persisted status (`herdr-eng artifacts reports status`), because `queued` is not an artifact yet;
+- the preview URL for that exact version and the library listing URL;
+- the context links attached (project, task, issue, room) and the project-scoped listing that proves someone else
+  can find it;
+- the checks recorded on that version (`rendered`, `evidence_checked`, `reviewed`) and which are still unsigned.
+
+Build the URLs on the origin the API answered on — the configured control-plane URL, or the `--control-plane`
+actually passed:
+
+```text
+<control-plane>/api/v1/artifacts/<artifact_id>/versions/<version_id>/preview
+<control-plane>/api/v1/library
+```
+
+Never substitute another service's hostname because it resolves and answers `200`: a fronting single-page app
+replies to unknown `/api/...` paths with a few kilobytes of HTML shell, which looks exactly like a served report.
+Prove a link before calling it verified — fetch the preview and check that it is a real document (tens of kilobytes
+up to the preview cap, not a couple of kilobytes of shell and not a short `400`/`404` body), and download one asset
+with `reports download` and compare its SHA-256 with the upload response. Do not compare the preview's byte count
+with the artifact's `size_bytes`: that number covers the stored payload and its supporting assets, not the bounded
+preview.
+
+Registry presence is not discoverability. Project-scoped views list nothing until the artifact is linked:
+`herdr-eng artifacts link <A> --project <id> --link-kind origin`, then `herdr-eng artifacts for project <id>` to
+show it there. Link it as part of finishing, not as a gap the operator discovers later.
+
+Offer the same URLs on the operator's device through the `herdr-open` launcher
+(`skills/herdr-open/scripts/open-client.py`: `discover --url ...`, then `show --select <id>`) and report transfer
+and launch separately; an offer is not proof the page was seen. If the device cannot reach that address, resolve
+the existing fabric service route rather than printing an unreachable link. A bearer share token never appears in
+these links and is never written into a file — public exposure stays the separate approval workflow below.
 
 ## Share links (safety contract)
 
