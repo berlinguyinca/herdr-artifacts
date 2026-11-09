@@ -151,8 +151,11 @@ actually passed:
 
 Never substitute another service's hostname because it resolves and answers `200`: a fronting single-page app
 replies to unknown `/api/...` paths with a few kilobytes of HTML shell, which looks exactly like a served report.
-Prove a link before calling it verified — fetch the preview and compare the byte count with the rendered size, and
-download one asset with `reports download` and compare its SHA-256 with the upload response.
+Prove a link before calling it verified — fetch the preview and check that it is a real document (tens of kilobytes
+up to the preview cap, not a couple of kilobytes of shell and not a short `400`/`404` body), and download one asset
+with `reports download` and compare its SHA-256 with the upload response. Do not compare the preview's byte count
+with the artifact's `size_bytes`: that number covers the stored payload and its supporting assets, not the bounded
+preview.
 
 Registry presence is not discoverability. Project-scoped views list nothing until the artifact is linked:
 `herdr-eng artifacts link <A> --project <id> --link-kind origin`, then `herdr-eng artifacts for project <id>` to
