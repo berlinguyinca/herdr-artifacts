@@ -1,10 +1,22 @@
 # GitGuardian (ggshield) config.
-# Anything whose path contains "test" (any case) is a test credential and is never flagged.
-# Mirrors the filepath exclusion in the GitGuardian dashboard.
+#
+# Test fixtures legitimately carry fake credentials, so they are excluded -- but by
+# path shape, not by the substring "test". A pattern like `*[Tt][Ee][Ss][Tt]*` exempts
+# every path CONTAINING those five letters, which silently exempts `latest/`,
+# `latest-release.yml`, `attest.py`, `protest-fixtures/` and any future file that
+# happens to spell the word inside another name. A secret scanner that skips a file
+# because of its name has to name the reason, and "this path is a test path" is a
+# segment or a filename convention, not a substring.
+#
+# This file is the narrow floor for ggshield runs. The GitGuardian dashboard carries a
+# broader filepath exclusion; keep this one narrower so the narrow rule still holds
+# when the dashboard setting is edited or lost.
 version: 2
 secret:
   ignored_paths:
-    - "**/*[Tt][Ee][Ss][Tt]*"
-    - "**/*[Tt][Ee][Ss][Tt]*/**"
-    - "*[Tt][Ee][Ss][Tt]*"
-    - "*[Tt][Ee][Ss][Tt]*/**"
+    - "**/tests/**"
+    - "**/test/**"
+    - "**/testdata/**"
+    - "**/test_*.py"
+    - "**/*_test.py"
+    - "**/conftest.py"
