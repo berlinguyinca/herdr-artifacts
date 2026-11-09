@@ -1,0 +1,9 @@
+# Test dependencies, pinned so a fresh checkout and CI agree.
+#
+# tests/test_reports.py validates skill/herdr-artifact/references/artifact-report-v1.schema.json
+# with jsonschema. Until this file existed the suite passed on a dev box that happened to
+# have jsonschema installed and failed on the CI runner with
+#   ModuleNotFoundError: No module named 'jsonschema'   (tests/test_reports.py:53)
+# Pinned to the versions this suite was verified against in a clean venv.
+pytest==9.2.0
+jsonschema==4.26.0

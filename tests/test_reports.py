@@ -1,8 +1,22 @@
-"""Exercise the wrapper contract and the bundled, cross-domain examples."""
+"""Exercise the wrapper contract and the bundled, cross-domain examples.
+
+Two layers live here and they have different prerequisites, which CI has to know about:
+
+* `ReportWrapperTests` puts a stand-in `herdr-eng` on PATH, so it runs anywhere.
+* `ReportExampleTests.test_examples_match_schema` is pure data: schema validity plus every
+  bundled asset's sha256 and size. It runs anywhere and is the part CI must never lose.
+* `ReportExampleTests.test_examples_validate_against_installed_runtime` drives the wrapper
+  against the REAL installed `herdr-eng`, because its whole point is that the shipped
+  examples are what the actual runtime accepts. `herdr-engineering` is not published to
+  PyPI, so a GitHub runner cannot install it; that test skips there, and the workflow
+  prints the skip reason in the job summary instead of letting it disappear. On a dev box
+  or any host with the runtime it runs.
+"""
 import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -49,12 +63,18 @@ class ReportWrapperTests(unittest.TestCase):
 
 
 class ReportExampleTests(unittest.TestCase):
-    def test_schema_and_examples_match_installed_runtime(self):
+    def examples_dir(self):
         import jsonschema
 
         schema = json.loads((SKILL / "references" / "artifact-report-v1.schema.json").read_text())
         jsonschema.Draft202012Validator.check_schema(schema)
-        examples = SKILL / "assets" / "report-examples"
+        return schema, SKILL / "assets" / "report-examples"
+
+    def test_examples_match_schema(self):
+        """Schema is valid, and every shipped asset's hash and size match its descriptor."""
+        import jsonschema
+
+        schema, examples = self.examples_dir()
         for name in ("benchmark", "incident-audit"):
             with self.subTest(example=name):
                 descriptor = json.loads((examples / (name + ".json")).read_text())
@@ -63,6 +83,17 @@ class ReportExampleTests(unittest.TestCase):
                     data = (examples / asset["name"]).read_bytes()
                     self.assertEqual(hashlib.sha256(data).hexdigest(), asset["sha256"])
                     self.assertEqual(len(data), asset["size_bytes"])
+
+    def test_examples_validate_against_installed_runtime(self):
+        """The real runtime accepts the shipped examples and reports them unreviewed."""
+        if shutil.which("herdr-eng") is None:
+            self.skipTest(
+                "needs the installed herdr-eng runtime, which this host does not have "
+                "(herdr-engineering is not on PyPI); run it where herdr-eng is installed"
+            )
+        _, examples = self.examples_dir()
+        for name in ("benchmark", "incident-audit"):
+            with self.subTest(example=name):
                 result = subprocess.run(
                     [str(WRAPPER), "report", "validate", str(examples / (name + ".json"))],
                     text=True, capture_output=True,

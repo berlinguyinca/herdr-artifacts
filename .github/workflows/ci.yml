@@ -36,7 +36,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        run: python -m pip install --upgrade pip pytest
+        # requirements-dev.txt exists because the suite needs jsonschema, which the
+        # runner does not carry; installing only pytest left CI red on the first run.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
 
       - name: POSIX syntax check (skill wrapper)
         run: sh -n skill/herdr-artifact/scripts/herdr-artifact
@@ -45,4 +49,19 @@ jobs:
         run: python -m py_compile skill/herdr-artifact/scripts/herdr-artifact-mcp
 
       - name: Suite
-        run: python -m pytest tests -q
+        # -rs keeps skip reasons in the output: one test needs the installed herdr-eng
+        # runtime, which the runner cannot have (see the module docstring of
+        # tests/test_reports.py), and that must be visible rather than silent.
+        run: |
+          set -o pipefail
+          python -m pytest tests -q -rs | tee "$RUNNER_TEMP/suite.log"
+
+      - name: Record what the runner could not prove
+        if: always()
+        run: |
+          {
+            echo '## Suite'
+            grep -E 'SKIPPED|[0-9]+ (passed|failed)' "$RUNNER_TEMP/suite.log" | tail -20
+            echo
+            echo 'SKIPPED lines above are real gaps in this runner, not successes.'
+          } >> "$GITHUB_STEP_SUMMARY"
