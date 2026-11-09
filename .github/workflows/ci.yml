@@ -1,0 +1,48 @@
+name: ci
+
+# What this repo actually ships: two extensionless scripts (a POSIX sh wrapper and a
+# python MCP server) and markdown. The suite asserts skill text agrees with the runtime
+# and drives both scripts as subprocesses, so the gate is: the wrapper parses as POSIX
+# sh, the MCP server byte-compiles, and the suite passes.
+#
+# COVERAGE IS NOT GATED HERE, AND THAT IS A KNOWN GAP, NOT AN OVERSIGHT.
+# Every script test runs `subprocess.run([script, ...])`. A plain `coverage run` traces
+# only the parent process, so it collects nothing. Measured on the merged tree:
+#   CoverageWarning: No data was collected. (no-data-collected)
+#   No data to report.
+# A percentage printed from that run would be fiction, and a threshold on it would fail
+# on day one or be set to zero. A real number needs the process-start hook
+# (COVERAGE_PROCESS_START plus a sitecustomize that calls coverage.process_startup(),
+# with PYTHONPATH carrying it into the child). That is tracked as an open issue; when it
+# lands, add `coverage combine && coverage report --fail-under=<measured>` here and
+# raise the number instead of lowering the test.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pytest
+
+      - name: POSIX syntax check (skill wrapper)
+        run: sh -n skill/herdr-artifact/scripts/herdr-artifact
+
+      - name: Byte-compile the MCP server
+        run: python -m py_compile skill/herdr-artifact/scripts/herdr-artifact-mcp
+
+      - name: Suite
+        run: python -m pytest tests -q
