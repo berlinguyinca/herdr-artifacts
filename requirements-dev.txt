@@ -7,3 +7,10 @@
 # Pinned to the versions this suite was verified against in a clean venv.
 pytest==9.2.0
 jsonschema==4.26.0
+
+# Needed to measure the shipped python at all. The suite runs scripts as subprocesses,
+# so coverage must exist in the CHILD interpreter as well (tests/coverage_bootstrap.py
+# puts its package directory on the child PYTHONPATH). Installed unpinned first, and
+# 7.17.2 is what produced the measured 90%; pinning keeps "the number in the workflow
+# floor" comparable between a laptop and the runner.
+coverage==7.17.2

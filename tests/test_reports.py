@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -25,6 +26,13 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "skill" / "herdr-artifact"
 WRAPPER = SKILL / "scripts" / "herdr-artifact"
+
+# See tests/coverage_bootstrap.py: the wrapper runs below get a PATH that leads with a
+# stub herdr-eng, and the coverage bootstrap has to travel with it or the run of the
+# shipped wrapper is silent about not being measured. Loaded by path so this file still
+# runs as `python tests/test_reports.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from coverage_bootstrap import forward  # noqa: E402
 
 
 class ReportWrapperTests(unittest.TestCase):
@@ -39,7 +47,7 @@ class ReportWrapperTests(unittest.TestCase):
             executable.chmod(0o755)
             return subprocess.run(
                 [str(WRAPPER), *args], text=True, capture_output=True,
-                env={**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"]},
+                env=forward({**os.environ, "PATH": directory + os.pathsep + os.environ["PATH"]}),
             )
 
     def test_report_preserves_argument_boundaries(self):

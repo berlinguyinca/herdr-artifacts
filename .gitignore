@@ -1,3 +1,12 @@
 __pycache__/
 .pytest_cache/
 .venv/
+
+# Coverage run by scripts/run-coverage.sh: .coverage-process.ini is generated per run
+# with absolute paths (tests/coverage_bootstrap.py), .coverage-data/ holds the children's
+# parallel files and the combined result. Neither is meaningful outside the run that made
+# it, and committing one would let a stale file look like a fresh measurement.
+.coverage
+.coverage.*
+.coverage-data/
+.coverage-process.ini

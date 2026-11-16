@@ -96,3 +96,31 @@ With `herdr-eng` on PATH and the runtime's existing `jsonschema` test dependency
 available, run `python3 -m unittest discover -s tests -v`. The tests
 exercise argument/exit forwarding, preserve raw-upload aliases, validate both
 example descriptors through the native CLI and schema, and verify asset hashes.
+
+## Coverage
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+bash scripts/run-coverage.sh
+```
+
+It reports one number: the python MCP server
+(`skill/herdr-artifact/scripts/herdr-artifact-mcp`), measured at **90%** (365
+statements, 38 missed) by running the suite. The scripts are executed as
+subprocesses, so the number comes from coverage's process-start hook rather than from
+tracing the test process, which would report nothing at all. `sitecustomize.py` in
+`ci/coverage/` starts coverage inside each child; `tests/conftest.py` writes the config
+it reads, with absolute paths, and `tests/coverage_bootstrap.py` hands the bootstrap
+across the deliberately hermetic environments some tests build.
+
+The runner also checks the measurement itself, because an empty measurement is
+otherwise indistinguishable from a passing one: it fails if no child wrote data, if a
+child interpreter could not import coverage, or if the report contains no row for the
+shipped script.
+
+Not covered by that percentage, deliberately: `skill/herdr-artifact/scripts/herdr-artifact`
+(the POSIX sh wrapper) and `install/install.sh`. coverage.py has no language for shell;
+those two are gated by `sh -n` and by the subprocess tests that assert their behaviour.
+
+Coverage wiring lives in `tests/conftest.py`, so it applies to pytest. A plain
+`python3 -m unittest discover -s tests` still runs the suite and measures nothing.
