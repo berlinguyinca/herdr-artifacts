@@ -5,17 +5,21 @@ name: ci
 # and drives both scripts as subprocesses, so the gate is: the wrapper parses as POSIX
 # sh, the MCP server byte-compiles, and the suite passes.
 #
-# COVERAGE IS NOT GATED HERE, AND THAT IS A KNOWN GAP, NOT AN OVERSIGHT.
-# Every script test runs `subprocess.run([script, ...])`. A plain `coverage run` traces
-# only the parent process, so it collects nothing. Measured on the merged tree:
+# COVERAGE IS GATED, ON THE SHIPPED PYTHON ONLY, AND THE GATE CHECKS ITS OWN MEASUREMENT.
+# Every script test runs `subprocess.run([script, ...])`, so a plain `coverage run`
+# traced only the parent. Measured on the tree before the fix:
 #   CoverageWarning: No data was collected. (no-data-collected)
 #   No data to report.
-# A percentage printed from that run would be fiction, and a threshold on it would fail
-# on day one or be set to zero. A real number needs the process-start hook
-# (COVERAGE_PROCESS_START plus a sitecustomize that calls coverage.process_startup(),
-# with PYTHONPATH carrying it into the child). That is tracked as an open issue; when it
-# lands, add `coverage combine && coverage report --fail-under=<measured>` here and
-# raise the number instead of lowering the test.
+# The number now comes from the process-start hook (ci/coverage/sitecustomize.py plus
+# COVERAGE_PROCESS_START, carried into children by tests/conftest.py and
+# tests/coverage_bootstrap.py -- some tests build a child env from scratch, so the
+# bootstrap has to be handed over deliberately or the child goes unmeasured in silence).
+# See scripts/run-coverage.sh: it fails if no child data file was written, if a child
+# said it could not import coverage, or if the report has no row for the shipped script,
+# because `--fail-under` alone would call an empty measurement green.
+#
+# The sh wrapper and install/install.sh are not Python: no coverage percentage describes
+# them, and none is claimed for them. Their gate is `sh -n` plus behaviour tests.
 
 on:
   pull_request:
@@ -45,23 +49,30 @@ jobs:
       - name: POSIX syntax check (skill wrapper)
         run: sh -n skill/herdr-artifact/scripts/herdr-artifact
 
-      - name: Byte-compile the MCP server
-        run: python -m py_compile skill/herdr-artifact/scripts/herdr-artifact-mcp
-
-      - name: Suite
-        # -rs keeps skip reasons in the output: one test needs the installed herdr-eng
-        # runtime, which the runner cannot have (see the module docstring of
-        # tests/test_reports.py), and that must be visible rather than silent.
+      - name: Byte-compile the shipped python and the test rig
         run: |
-          set -o pipefail
-          python -m pytest tests -q -rs | tee "$RUNNER_TEMP/suite.log"
+          python -m py_compile skill/herdr-artifact/scripts/herdr-artifact-mcp
+          python -m py_compile ci/coverage/sitecustomize.py tests/*.py
+
+      - name: Suite + coverage
+        # scripts/run-coverage.sh runs pytest (with -rs, so skip reasons stay visible:
+        # one test needs the installed herdr-eng runtime, which the runner cannot have --
+        # see the module docstring of tests/test_reports.py), then combines the children's
+        # data and gates the shipped Python at the measured floor.
+        run: bash scripts/run-coverage.sh
 
       - name: Record what the runner could not prove
         if: always()
         run: |
           {
             echo '## Suite'
-            grep -E 'SKIPPED|[0-9]+ (passed|failed)' "$RUNNER_TEMP/suite.log" | tail -20
+            if [ -f .coverage-data/suite.log ]; then
+              grep -E 'SKIPPED|[0-9]+ (passed|failed)' .coverage-data/suite.log | tail -20
+            else
+              echo 'no suite log: run-coverage.sh failed before the suite ran'
+            fi
             echo
             echo 'SKIPPED lines above are real gaps in this runner, not successes.'
+            echo 'The coverage figure covers the shipped python only; the sh wrapper and'
+            echo 'install.sh are not python and are gated by `sh -n` and behaviour tests.'
           } >> "$GITHUB_STEP_SUMMARY"

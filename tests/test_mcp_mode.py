@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -15,6 +16,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "skill" / "herdr-artifact"
 WRAPPER = SKILL / "scripts" / "herdr-artifact"
 MCP = SKILL / "scripts" / "herdr-artifact-mcp"
+
+# forward() lets a coverage measurement cross the hermetic child environments below
+# (they drop os.environ on purpose, so PYTHONPATH and COVERAGE_PROCESS_START would
+# otherwise vanish and the child would simply go unmeasured). Imported by path so this
+# file still runs as `python tests/test_mcp_mode.py`, which unittest.main() at the
+# bottom promises.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from coverage_bootstrap import forward  # noqa: E402
 CHUNK = 524_288
 CREDENTIAL = "cred-SECRET-0123456789"
 SECRET_URL = "https://artifacts.example.org/s/TOKEN-ABCDEF/"
@@ -165,7 +174,8 @@ class Env:
         env = {"HOME": str(self.home), "PATH": os.environ["PATH"]}
         if script == WRAPPER or path_prepend:  # a hermetic PATH: the host's own herdr-eng must not leak in
             env["PATH"] = (path_prepend + os.pathsep if path_prepend else "") + "/usr/bin:/bin"
-        return subprocess.run([str(script), *args], text=True, capture_output=True, cwd=self.work, env=env, timeout=60)
+        return subprocess.run([str(script), *args], text=True, capture_output=True, cwd=self.work,
+                              env=forward(env), timeout=60)
 
     def logs(self):
         found = []
@@ -536,7 +546,8 @@ class WrapperDispatchTests(unittest.TestCase):
             (tools / t).symlink_to(subprocess.check_output(["which", t], text=True).strip())
         self.fake_eng(1)
         env = {"HOME": str(self.env.home), "PATH": str(self.bin) + os.pathsep + str(tools)}
-        r = subprocess.run([str(WRAPPER), "list"], text=True, capture_output=True, env=env, cwd=self.env.work, timeout=60)
+        r = subprocess.run([str(WRAPPER), "list"], text=True, capture_output=True, env=forward(env),
+                           cwd=self.env.work, timeout=60)
         self.assertEqual(self.stub.names(), ["artifacts_mine"], r.stderr)
 
     def test_bad_mode_is_usage_error(self):
